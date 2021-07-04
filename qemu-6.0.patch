@@ -1,0 +1,843 @@
+diff -uNr qemu-6.0.0/accel/tcg/translate-all.c qemu-6.0.0-fix/accel/tcg/translate-all.c
+--- qemu-6.0.0/accel/tcg/translate-all.c	2021-04-29 17:18:59.000000000 +0000
++++ qemu-6.0.0-fix/accel/tcg/translate-all.c	2021-06-29 17:15:52.150866429 +0000
+@@ -47,6 +47,8 @@
+ #include "exec/ram_addr.h"
+ #endif
+ 
++#include <linux/mman.h>
++
+ #include "exec/cputlb.h"
+ #include "exec/tb-hash.h"
+ #include "exec/translate-all.h"
+diff -uNr qemu-6.0.0/audio/ossaudio.c qemu-6.0.0-fix/audio/ossaudio.c
+--- qemu-6.0.0/audio/ossaudio.c	2021-04-29 17:18:58.000000000 +0000
++++ qemu-6.0.0-fix/audio/ossaudio.c	2021-06-29 17:15:52.154866503 +0000
+@@ -24,13 +24,15 @@
+ 
+ #include "qemu/osdep.h"
+ #include <sys/ioctl.h>
+-#include <sys/soundcard.h>
++#include <linux/soundcard.h>
+ #include "qemu/main-loop.h"
+ #include "qemu/module.h"
+ #include "qemu/host-utils.h"
+ #include "audio.h"
+ #include "trace.h"
+ 
++#include <linux/mman.h>
++
+ #define AUDIO_CAP "oss"
+ #include "audio_int.h"
+ 
+diff -uNr qemu-6.0.0/block/file-posix.c qemu-6.0.0-fix/block/file-posix.c
+--- qemu-6.0.0/block/file-posix.c	2021-04-29 17:18:58.000000000 +0000
++++ qemu-6.0.0-fix/block/file-posix.c	2021-06-29 17:15:52.154866503 +0000
+@@ -59,6 +59,7 @@
+ #include <sys/dkio.h>
+ #endif
+ #ifdef __linux__
++#include <linux/mman.h>
+ #include <sys/ioctl.h>
+ #include <sys/param.h>
+ #include <sys/syscall.h>
+diff -uNr qemu-6.0.0/configure qemu-6.0.0-fix/configure
+--- qemu-6.0.0/configure	2021-04-29 17:18:59.000000000 +0000
++++ qemu-6.0.0-fix/configure	2021-06-29 17:18:18.817620796 +0000
+@@ -535,7 +535,7 @@
+ nm="${NM-${cross_prefix}nm}"
+ strip="${STRIP-${cross_prefix}strip}"
+ windres="${WINDRES-${cross_prefix}windres}"
+-pkg_config_exe="${PKG_CONFIG-${cross_prefix}pkg-config}"
++pkg_config_exe="${PKG_CONFIG-pkg-config}"
+ query_pkg_config() {
+     "${pkg_config_exe}" ${QEMU_PKG_CONFIG_FLAGS} "$@"
+ }
+@@ -2822,6 +2822,8 @@
+ fi
+ 
+ has_libgcrypt() {
++	return 0
++
+     if ! has "libgcrypt-config"
+     then
+ 	return 1
+@@ -2891,10 +2893,7 @@
+         # Debian has removed -lgpg-error from libgcrypt-config
+         # as it "spreads unnecessary dependencies" which in
+         # turn breaks static builds...
+-        if test "$static" = "yes"
+-        then
+-            gcrypt_libs="$gcrypt_libs -lgpg-error"
+-        fi
++        gcrypt_libs="$gcrypt_libs -lgpg-error"
+ 
+         # Link test to make sure the given libraries work (e.g for static).
+         write_c_skeleton
+@@ -3792,6 +3791,7 @@
+ if compile_prog "" "" ; then
+   signalfd=yes
+ fi
++signalfd=no
+ 
+ # check if optreset global is declared by <getopt.h>
+ optreset="no"
+@@ -5368,7 +5368,7 @@
+ 
+ # We can only support ivshmem if we have eventfd
+ if [ "$eventfd" = "yes" ]; then
+-  ivshmem=yes
++  ivshmem=no
+ fi
+ 
+ # Probe for guest agent support/options
+@@ -5511,6 +5511,7 @@
+ if test "$darwin" = "yes" ; then
+   echo "CONFIG_DARWIN=y" >> $config_host_mak
+ fi
++ivshmem=no
+ 
+ if test "$solaris" = "yes" ; then
+   echo "CONFIG_SOLARIS=y" >> $config_host_mak
+@@ -5617,9 +5618,9 @@
+ if test "$posix_fallocate" = "yes" ; then
+   echo "CONFIG_POSIX_FALLOCATE=y" >> $config_host_mak
+ fi
+-if test "$sync_file_range" = "yes" ; then
+-  echo "CONFIG_SYNC_FILE_RANGE=y" >> $config_host_mak
+-fi
++#if test "$sync_file_range" = "yes" ; then
++#  echo "CONFIG_SYNC_FILE_RANGE=y" >> $config_host_mak
++#fi
+ if test "$fiemap" = "yes" ; then
+   echo "CONFIG_FIEMAP=y" >> $config_host_mak
+ fi
+diff -uNr qemu-6.0.0/fsdev/9p-marshal.h qemu-6.0.0-fix/fsdev/9p-marshal.h
+--- qemu-6.0.0/fsdev/9p-marshal.h	2021-04-29 17:18:58.000000000 +0000
++++ qemu-6.0.0-fix/fsdev/9p-marshal.h	2021-06-29 17:15:11.510117320 +0000
+@@ -44,6 +44,18 @@
+     int64_t mtime_nsec;
+ } V9fsIattr;
+ 
++#ifdef st_atime_nsec
++# undef st_atime_nsec
++#endif
++
++#ifdef st_mtime_nsec
++# undef st_mtime_nsec
++#endif
++
++#ifdef st_ctime_nsec
++# undef st_ctime_nsec
++#endif
++
+ typedef struct V9fsStatDotl {
+     uint64_t st_result_mask;
+     V9fsQID qid;
+diff -uNr qemu-6.0.0/hw/9pfs/9p-local.c qemu-6.0.0-fix/hw/9pfs/9p-local.c
+--- qemu-6.0.0/hw/9pfs/9p-local.c	2021-04-29 17:18:58.000000000 +0000
++++ qemu-6.0.0-fix/hw/9pfs/9p-local.c	2021-06-29 17:15:20.010273745 +0000
+@@ -535,9 +535,23 @@
+     rewinddir(fs->dir.stream);
+ }
+ 
++struct DIR {
++    int fd_;
++};
++
++static long android_telldir(struct DIR *dirp)
++{
++    return (long) lseek(dirp->fd_, 0, SEEK_CUR);
++}
++
++static void android_seekdir(DIR *dirp, long loc)
++{
++    (void) lseek(dirp->fd_, loc, SEEK_SET);
++}
++
+ static off_t local_telldir(FsContext *ctx, V9fsFidOpenState *fs)
+ {
+-    return telldir(fs->dir.stream);
++    return android_telldir(fs->dir.stream);
+ }
+ 
+ static bool local_is_mapped_file_metadata(FsContext *fs_ctx, const char *name)
+@@ -571,7 +585,7 @@
+ 
+ static void local_seekdir(FsContext *ctx, V9fsFidOpenState *fs, off_t off)
+ {
+-    seekdir(fs->dir.stream, off);
++    android_seekdir(fs->dir.stream, off);
+ }
+ 
+ static ssize_t local_preadv(FsContext *ctx, V9fsFidOpenState *fs,
+diff -uNr qemu-6.0.0/hw/9pfs/9p-proxy.c qemu-6.0.0-fix/hw/9pfs/9p-proxy.c
+--- qemu-6.0.0/hw/9pfs/9p-proxy.c	2021-04-29 17:18:58.000000000 +0000
++++ qemu-6.0.0-fix/hw/9pfs/9p-proxy.c	2021-06-29 17:15:20.010273745 +0000
+@@ -676,9 +676,23 @@
+     rewinddir(fs->dir.stream);
+ }
+ 
++struct DIR {
++    int fd_;
++};
++
++static long android_telldir(struct DIR *dirp)
++{
++    return (long) lseek(dirp->fd_, 0, SEEK_CUR);
++}
++
++static void android_seekdir(DIR *dirp, long loc)
++{
++    (void) lseek(dirp->fd_, loc, SEEK_SET);
++}
++
+ static off_t proxy_telldir(FsContext *ctx, V9fsFidOpenState *fs)
+ {
+-    return telldir(fs->dir.stream);
++    return android_telldir(fs->dir.stream);
+ }
+ 
+ static struct dirent *proxy_readdir(FsContext *ctx, V9fsFidOpenState *fs)
+@@ -688,7 +702,7 @@
+ 
+ static void proxy_seekdir(FsContext *ctx, V9fsFidOpenState *fs, off_t off)
+ {
+-    seekdir(fs->dir.stream, off);
++    android_seekdir(fs->dir.stream, off);
+ }
+ 
+ static ssize_t proxy_preadv(FsContext *ctx, V9fsFidOpenState *fs,
+diff -uNr qemu-6.0.0/hw/vfio/common.c qemu-6.0.0-fix/hw/vfio/common.c
+--- qemu-6.0.0/hw/vfio/common.c	2021-04-29 17:18:58.000000000 +0000
++++ qemu-6.0.0-fix/hw/vfio/common.c	2021-06-29 17:15:56.118939857 +0000
+@@ -24,6 +24,7 @@
+ #include <linux/kvm.h>
+ #endif
+ #include <linux/vfio.h>
++#include <linux/mman.h>
+ 
+ #include "hw/vfio/vfio-common.h"
+ #include "hw/vfio/vfio.h"
+diff -uNr qemu-6.0.0/hw/vfio/pci-quirks.c qemu-6.0.0-fix/hw/vfio/pci-quirks.c
+--- qemu-6.0.0/hw/vfio/pci-quirks.c	2021-04-29 17:18:58.000000000 +0000
++++ qemu-6.0.0-fix/hw/vfio/pci-quirks.c	2021-06-29 17:15:56.122939931 +0000
+@@ -28,6 +28,8 @@
+ #include "pci.h"
+ #include "trace.h"
+ 
++#include <linux/mman.h>
++
+ /*
+  * List of device ids/vendor ids for which to disable
+  * option rom loading. This avoids the guest hangs during rom
+diff -uNr qemu-6.0.0/hw/virtio/vhost-user.c qemu-6.0.0-fix/hw/virtio/vhost-user.c
+--- qemu-6.0.0/hw/virtio/vhost-user.c	2021-04-29 17:18:58.000000000 +0000
++++ qemu-6.0.0-fix/hw/virtio/vhost-user.c	2021-06-29 17:15:56.122939931 +0000
+@@ -33,6 +33,7 @@
+ #include "standard-headers/linux/vhost_types.h"
+ 
+ #ifdef CONFIG_LINUX
++#include <linux/mman.h>
+ #include <linux/userfaultfd.h>
+ #endif
+ 
+diff -uNr qemu-6.0.0/include/qapi/util.h qemu-6.0.0-fix/include/qapi/util.h
+--- qemu-6.0.0/include/qapi/util.h	2021-04-29 17:18:58.000000000 +0000
++++ qemu-6.0.0-fix/include/qapi/util.h	2021-06-29 17:16:08.151162480 +0000
+@@ -11,6 +11,10 @@
+ #ifndef QAPI_UTIL_H
+ #define QAPI_UTIL_H
+ 
++#include <glib.h>
++
++typedef struct Error Error;
++
+ typedef struct QEnumLookup {
+     const char *const *array;
+     int size;
+diff -uNr qemu-6.0.0/linux-user/aarch64/signal.c qemu-6.0.0-fix/linux-user/aarch64/signal.c
+--- qemu-6.0.0/linux-user/aarch64/signal.c	2021-04-29 17:18:58.000000000 +0000
++++ qemu-6.0.0-fix/linux-user/aarch64/signal.c	2021-06-29 17:15:45.802748943 +0000
+@@ -38,7 +38,7 @@
+     target_stack_t tuc_stack;
+     target_sigset_t tuc_sigmask;
+     /* glibc uses a 1024-bit sigset_t */
+-    char __unused[1024 / 8 - sizeof(target_sigset_t)];
++    char __qemu_unused[1024 / 8 - sizeof(target_sigset_t)];
+     /* last for future expansion */
+     struct target_sigcontext tuc_mcontext;
+ };
+diff -uNr qemu-6.0.0/linux-user/arm/signal.c qemu-6.0.0-fix/linux-user/arm/signal.c
+--- qemu-6.0.0/linux-user/arm/signal.c	2021-04-29 17:18:58.000000000 +0000
++++ qemu-6.0.0-fix/linux-user/arm/signal.c	2021-06-29 17:15:45.802748943 +0000
+@@ -59,7 +59,7 @@
+     target_stack_t tuc_stack;
+     struct target_sigcontext tuc_mcontext;
+     target_sigset_t  tuc_sigmask;       /* mask last for extensibility */
+-    char __unused[128 - sizeof(target_sigset_t)];
++    char __qemu_unused[128 - sizeof(target_sigset_t)];
+     abi_ulong tuc_regspace[128] __attribute__((__aligned__(8)));
+ };
+ 
+diff -uNr qemu-6.0.0/linux-user/elfload.c qemu-6.0.0-fix/linux-user/elfload.c
+--- qemu-6.0.0/linux-user/elfload.c	2021-04-29 17:18:58.000000000 +0000
++++ qemu-6.0.0-fix/linux-user/elfload.c	2021-06-29 17:15:56.122939931 +0000
+@@ -2,6 +2,8 @@
+ #include "qemu/osdep.h"
+ #include <sys/param.h>
+ 
++#include <linux/mman.h>
++
+ #include <sys/resource.h>
+ #include <sys/shm.h>
+ 
+@@ -2401,7 +2403,7 @@
+                       abi_ulong guest_hiaddr)
+ {
+     /* In order to use host shmat, we must be able to honor SHMLBA.  */
+-    uintptr_t align = MAX(SHMLBA, qemu_host_page_size);
++    uintptr_t align = MAX(/* SHMLBA */ getpagesize(), qemu_host_page_size);
+ 
+     if (have_guest_base) {
+         pgb_have_guest_base(image_name, guest_loaddr, guest_hiaddr, align);
+diff -uNr qemu-6.0.0/linux-user/flatload.c qemu-6.0.0-fix/linux-user/flatload.c
+--- qemu-6.0.0/linux-user/flatload.c	2021-04-29 17:18:58.000000000 +0000
++++ qemu-6.0.0-fix/linux-user/flatload.c	2021-06-29 17:15:56.122939931 +0000
+@@ -35,6 +35,8 @@
+ 
+ #include "qemu/osdep.h"
+ 
++#include <linux/mman.h>
++
+ #include "qemu.h"
+ #include "flat.h"
+ #include "target_flat.h"
+diff -uNr qemu-6.0.0/linux-user/i386/cpu_loop.c qemu-6.0.0-fix/linux-user/i386/cpu_loop.c
+--- qemu-6.0.0/linux-user/i386/cpu_loop.c	2021-04-29 17:18:58.000000000 +0000
++++ qemu-6.0.0-fix/linux-user/i386/cpu_loop.c	2021-06-29 17:15:56.122939931 +0000
+@@ -22,6 +22,8 @@
+ #include "qemu.h"
+ #include "cpu_loop-common.h"
+ 
++#include <linux/mman.h>
++
+ /***********************************************************/
+ /* CPUX86 core interface */
+ 
+diff -uNr qemu-6.0.0/linux-user/main.c qemu-6.0.0-fix/linux-user/main.c
+--- qemu-6.0.0/linux-user/main.c	2021-04-29 17:18:58.000000000 +0000
++++ qemu-6.0.0-fix/linux-user/main.c	2021-06-29 17:16:30.623581546 +0000
+@@ -798,7 +798,13 @@
+      * If we're in a chroot with no /proc, fall back to 1 page.
+      */
+     if (mmap_min_addr == 0) {
++#ifdef __ANDROID__
++        // Go with 8 pages (32768 bytes) as default value for Android (Termux).
++        // Issue https://github.com/termux/termux-packages/issues/6172.
++        mmap_min_addr = qemu_host_page_size * 8;
++#else
+         mmap_min_addr = qemu_host_page_size;
++#endif
+         qemu_log_mask(CPU_LOG_PAGE,
+                       "host mmap_min_addr=0x%lx (fallback)\n",
+                       mmap_min_addr);
+diff -uNr qemu-6.0.0/linux-user/mmap.c qemu-6.0.0-fix/linux-user/mmap.c
+--- qemu-6.0.0/linux-user/mmap.c	2021-04-29 17:18:58.000000000 +0000
++++ qemu-6.0.0-fix/linux-user/mmap.c	2021-06-29 17:15:56.122939931 +0000
+@@ -21,6 +21,8 @@
+ #include "exec/log.h"
+ #include "qemu.h"
+ 
++#include <linux/mman.h>
++
+ static pthread_mutex_t mmap_mutex = PTHREAD_MUTEX_INITIALIZER;
+ static __thread int mmap_lock_count;
+ 
+diff -uNr qemu-6.0.0/linux-user/riscv/signal.c qemu-6.0.0-fix/linux-user/riscv/signal.c
+--- qemu-6.0.0/linux-user/riscv/signal.c	2021-04-29 17:18:58.000000000 +0000
++++ qemu-6.0.0-fix/linux-user/riscv/signal.c	2021-06-29 17:15:45.802748943 +0000
+@@ -41,7 +41,7 @@
+     struct target_ucontext *uc_link;
+     target_stack_t uc_stack;
+     target_sigset_t uc_sigmask;
+-    uint8_t   __unused[1024 / 8 - sizeof(target_sigset_t)];
++    uint8_t   __qemu_unused[1024 / 8 - sizeof(target_sigset_t)];
+     struct target_sigcontext uc_mcontext QEMU_ALIGNED(16);
+ };
+ 
+diff -uNr qemu-6.0.0/linux-user/signal.c qemu-6.0.0-fix/linux-user/signal.c
+--- qemu-6.0.0/linux-user/signal.c	2021-04-29 17:18:58.000000000 +0000
++++ qemu-6.0.0-fix/linux-user/signal.c	2021-06-29 17:15:25.082367068 +0000
+@@ -198,6 +198,27 @@
+     return qatomic_xchg(&ts->signal_pending, 1);
+ }
+ 
++#ifdef _NSIG_WORDS
++static int sigorset(sigset_t *dest, const sigset_t *a, const sigset_t *b)
++{
++    int i;
++    if (!dest || !a || !b)
++        return -1;
++    for (i = 0; i < _NSIG_WORDS; i++)
++        dest->sig[i] = a->sig[i] | b->sig[i];
++    return 0;
++}
++#else
++static int sigorset(sigset_t *dest, const sigset_t *a, const sigset_t *b)
++{
++    int i;
++    if (!dest || !a || !b)
++        return -1;
++    *dest = *a | *b;
++    return 0;
++}
++#endif
++
+ /* Wrapper for sigprocmask function
+  * Emulates a sigprocmask in a safe way for the guest. Note that set and oldset
+  * are host signal set, not guest ones. Returns -TARGET_ERESTARTSYS if
+diff -uNr qemu-6.0.0/linux-user/strace.c qemu-6.0.0-fix/linux-user/strace.c
+--- qemu-6.0.0/linux-user/strace.c	2021-04-29 17:18:58.000000000 +0000
++++ qemu-6.0.0-fix/linux-user/strace.c	2021-06-29 17:15:34.474539905 +0000
+@@ -1,7 +1,7 @@
+ #include "qemu/osdep.h"
+ #include <sys/ipc.h>
+ #include <sys/msg.h>
+-#include <sys/sem.h>
++#include <linux/sem.h>
+ #include <sys/shm.h>
+ #include <sys/select.h>
+ #include <sys/mount.h>
+diff -uNr qemu-6.0.0/linux-user/syscall.c qemu-6.0.0-fix/linux-user/syscall.c
+--- qemu-6.0.0/linux-user/syscall.c	2021-04-29 17:18:59.000000000 +0000
++++ qemu-6.0.0-fix/linux-user/syscall.c	2021-06-29 17:15:56.122939931 +0000
+@@ -36,6 +36,7 @@
+ #include <sys/resource.h>
+ #include <sys/swap.h>
+ #include <linux/capability.h>
++#include <linux/mman.h>
+ #include <sched.h>
+ #include <sys/timex.h>
+ #include <sys/socket.h>
+@@ -45,7 +46,7 @@
+ #include <poll.h>
+ #include <sys/times.h>
+ #include <sys/shm.h>
+-#include <sys/sem.h>
++#include <linux/sem.h>
+ #include <sys/statfs.h>
+ #include <utime.h>
+ #include <sys/sysinfo.h>
+@@ -82,12 +83,17 @@
+ #endif
+ 
+ #define termios host_termios
++#define termios2 host_termios2
++#define ktermios host_ktermios
+ #define winsize host_winsize
+ #define termio host_termio
+ #define sgttyb host_sgttyb /* same as target */
+ #define tchars host_tchars /* same as target */
+ #define ltchars host_ltchars /* same as target */
+ 
++#undef __ASM_GENERIC_TERMBITS_H
++#include <asm/termbits.h>
++
+ #include <linux/termios.h>
+ #include <linux/unistd.h>
+ #include <linux/cdrom.h>
+@@ -272,6 +278,59 @@
+ #define __NR__llseek __NR_lseek
+ #endif
+ 
++_syscall0(int, vhangup)
++#ifdef __NR_msgctl
++_syscall3(int, msgctl, int, msqid, int, cmd, struct msqid_ds *, buf)
++#else
++static int
++msgctl (int msqid, int cmd, struct msqid_ds *buf)
++{
++    return syscall (__NR_ipc, IPCOP_msgctl, msqid, cmd | 0x100, 0, buf);
++}
++#endif
++
++#ifdef __NR_semget
++_syscall3(int, semget, key_t, key, int, nsems, int, semflg)
++#else
++static int
++semget (key_t key, int nsems, int semflg)
++{
++    return syscall (__NR_ipc, IPCOP_semget, key, nsems, semflg, NULL);
++}
++#endif
++
++_syscall2(int, setdomainname, const char *, name, size_t, len)
++#ifdef __NR_msgget
++_syscall2(int, msgget, key_t, key, int, msgflg)
++#else
++static int
++msgget (key_t key, int msgflg)
++{
++    return syscall(__NR_ipc, 5, IPCOP_msgget, key, msgflg, 0, NULL);
++}
++#endif
++
++#ifdef _NSIG_WORDS
++static int sigorset(sigset_t *dest, const sigset_t *a, const sigset_t *b)
++{
++    int i;
++    if (!dest || !a || !b)
++        return -1;
++    for (i = 0; i < _NSIG_WORDS; i++)
++        dest->sig[i] = a->sig[i] | b->sig[i];
++    return 0;
++}
++#else
++static int sigorset(sigset_t *dest, const sigset_t *a, const sigset_t *b)
++{
++    int i;
++    if (!dest || !a || !b)
++        return -1;
++    *dest = *a | *b;
++    return 0;
++}
++#endif
++
+ /* Newer kernel ports have llseek() instead of _llseek() */
+ #if defined(TARGET_NR_llseek) && !defined(TARGET_NR__llseek)
+ #define TARGET_NR__llseek TARGET_NR_llseek
+@@ -821,6 +880,9 @@
+     defined(TARGET_NR_mq_timedreceive_time64)
+ safe_syscall5(int, mq_timedreceive, int, mqdes, char *, msg_ptr,
+               size_t, len, unsigned *, prio, const struct timespec *, timeout)
++_syscall1(int, mq_unlink, const char *, name)
++_syscall4(__kernel_mqd_t, mq_open, const char *, name, int, oflag, mode_t, mode,
++          struct mq_attr *, attr)
+ #endif
+ #if defined(TARGET_NR_copy_file_range) && defined(__NR_copy_file_range)
+ safe_syscall6(ssize_t, copy_file_range, int, infd, loff_t *, pinoff,
+@@ -1353,7 +1415,7 @@
+ #endif
+ 
+ #if defined(TARGET_NR_mq_open) && defined(__NR_mq_open)
+-#include <mqueue.h>
++#include <linux/mqueue.h>
+ 
+ static inline abi_long copy_from_user_mq_attr(struct mq_attr *attr,
+                                               abi_ulong target_mq_attr_addr)
+@@ -3906,6 +3968,8 @@
+     return 0;
+ }
+ 
++#define semid_ds __kernel_legacy_semid_ds
++
+ static inline abi_long target_to_host_semid_ds(struct semid_ds *host_sd,
+                                                abi_ulong target_addr)
+ {
+@@ -3985,6 +4049,16 @@
+ 	abi_ulong __buf;
+ };
+ 
++#ifdef __NR_semctl
++_syscall4(int, semctl, int, semid, int, semnum, int, cmd, union semun, arg4)
++#else
++static int semctl(int semid, int semnum, int cmd, union semun arg4)
++{
++    return syscall(__NR_ipc, IPCOP_semctl, semid, semnum, cmd | 0x100,
++          arg4.__buf);
++}
++#endif
++
+ static inline abi_long target_to_host_semarray(int semid, unsigned short **host_array,
+                                                abi_ulong target_addr)
+ {
+@@ -4115,7 +4189,7 @@
+ 	case GETPID:
+ 	case GETNCNT:
+ 	case GETZCNT:
+-            ret = get_errno(semctl(semid, semnum, cmd, NULL));
++            ret = get_errno(semctl(semid, semnum, cmd, (union semun) {.buf = NULL}));
+             break;
+     }
+ 
+@@ -4250,7 +4324,7 @@
+     host_md->msg_stime = tswapal(target_md->msg_stime);
+     host_md->msg_rtime = tswapal(target_md->msg_rtime);
+     host_md->msg_ctime = tswapal(target_md->msg_ctime);
+-    host_md->__msg_cbytes = tswapal(target_md->__msg_cbytes);
++    host_md->msg_cbytes = tswapal(target_md->__msg_cbytes);
+     host_md->msg_qnum = tswapal(target_md->msg_qnum);
+     host_md->msg_qbytes = tswapal(target_md->msg_qbytes);
+     host_md->msg_lspid = tswapal(target_md->msg_lspid);
+@@ -4271,7 +4345,7 @@
+     target_md->msg_stime = tswapal(host_md->msg_stime);
+     target_md->msg_rtime = tswapal(host_md->msg_rtime);
+     target_md->msg_ctime = tswapal(host_md->msg_ctime);
+-    target_md->__msg_cbytes = tswapal(host_md->__msg_cbytes);
++    target_md->__msg_cbytes = tswapal(host_md->msg_cbytes);
+     target_md->msg_qnum = tswapal(host_md->msg_qnum);
+     target_md->msg_qbytes = tswapal(host_md->msg_qbytes);
+     target_md->msg_lspid = tswapal(host_md->msg_lspid);
+@@ -4639,7 +4713,7 @@
+         abi_ulong mmap_start;
+ 
+         /* In order to use the host shmat, we need to honor host SHMLBA.  */
+-        mmap_start = mmap_find_vma(0, shm_info.shm_segsz, MAX(SHMLBA, shmlba));
++        mmap_start = mmap_find_vma(0, shm_info.shm_segsz, MAX(/* SHMLBA */ getpagesize(), shmlba));
+ 
+         if (mmap_start == -1) {
+             errno = ENOMEM;
+@@ -5780,6 +5854,9 @@
+     return get_errno(safe_ioctl(fd, ie->host_cmd, filter));
+ }
+ 
++#undef winsize
++#undef termio
++
+ IOCTLEntry ioctl_entries[] = {
+ #define IOCTL(cmd, access, ...) \
+     { TARGET_ ## cmd, cmd, #cmd, access, 0, {  __VA_ARGS__ } },
+@@ -8689,7 +8766,7 @@
+         unlock_user(p, arg1, 0);
+         return ret;
+ #endif
+-#ifdef TARGET_NR_stime /* not on alpha */
++#if 0 //def TARGET_NR_stime /* not on alpha */
+     case TARGET_NR_stime:
+         {
+             struct timespec ts;
+@@ -8753,7 +8830,7 @@
+         }
+         return ret;
+ #endif
+-#if defined(TARGET_NR_futimesat)
++#if 0 && defined(TARGET_NR_futimesat)
+     case TARGET_NR_futimesat:
+         {
+             struct timeval *tvp, tv[2];
+@@ -12586,7 +12663,7 @@
+     /* Not implemented for now... */
+ /*     case TARGET_NR_mq_notify: */
+ /*         break; */
+-
++#if 0
+     case TARGET_NR_mq_getsetattr:
+         {
+             struct mq_attr posix_mq_attr_in, posix_mq_attr_out;
+@@ -12604,6 +12681,7 @@
+         }
+         return ret;
+ #endif
++#endif
+ 
+ #ifdef CONFIG_SPLICE
+ #ifdef TARGET_NR_tee
+diff -uNr qemu-6.0.0/linux-user/syscall_defs.h qemu-6.0.0-fix/linux-user/syscall_defs.h
+--- qemu-6.0.0/linux-user/syscall_defs.h	2021-04-29 17:18:58.000000000 +0000
++++ qemu-6.0.0-fix/linux-user/syscall_defs.h	2021-06-29 17:15:45.802748943 +0000
+@@ -1965,7 +1965,7 @@
+        abi_ulong    target_st_mtime_nsec;
+        abi_ulong    target_st_ctime;
+        abi_ulong    target_st_ctime_nsec;
+-       abi_long     __unused[3];
++       abi_long     __qemu_unused[3];
+ };
+ 
+ #elif defined(TARGET_SH4)
+@@ -2052,7 +2052,7 @@
+ 	abi_ulong	target_st_ctime;
+ 	abi_ulong       target_st_ctime_nsec;
+ 
+-	abi_long	__unused[3];
++	abi_long	__qemu_unused[3];
+ };
+ #elif defined(TARGET_S390X)
+ struct target_stat {
+@@ -2073,7 +2073,7 @@
+     abi_ulong  target_st_ctime_nsec;
+     abi_ulong  st_blksize;
+     abi_long       st_blocks;
+-    abi_ulong  __unused[3];
++    abi_ulong  __qemu_unused[3];
+ };
+ #elif defined(TARGET_AARCH64)
+ #define TARGET_STAT_HAVE_NSEC
+@@ -2096,7 +2096,7 @@
+     abi_ulong  target_st_mtime_nsec;
+     abi_long  target_st_ctime;
+     abi_ulong  target_st_ctime_nsec;
+-    unsigned int __unused[2];
++    unsigned int __qemu_unused[2];
+ };
+ #elif defined(TARGET_XTENSA)
+ #define TARGET_STAT_HAVE_NSEC
+diff -uNr qemu-6.0.0/meson.build qemu-6.0.0-fix/meson.build
+--- qemu-6.0.0/meson.build	2021-04-29 17:18:58.000000000 +0000
++++ qemu-6.0.0-fix/meson.build	2021-06-29 17:16:08.151162480 +0000
+@@ -107,11 +107,11 @@
+ 
+ # Specify linker-script with add_project_link_arguments so that it is not placed
+ # within a linker --start-group/--end-group pair
+-if 'CONFIG_FUZZ' in config_host
+-   add_project_link_arguments(['-Wl,-T,',
+-                               (meson.current_source_dir() / 'tests/qtest/fuzz/fork_fuzz.ld')],
+-                              native: false, language: ['c', 'cpp', 'objc'])
+-endif
++#if 'CONFIG_FUZZ' in config_host
++#   add_project_link_arguments(['-Wl,-T,',
++#                               (meson.current_source_dir() / 'tests/qtest/fuzz/fork_fuzz.ld')],
++#                              native: false, language: ['c', 'cpp', 'objc'])
++#endif
+ 
+ add_global_arguments(config_host['QEMU_CFLAGS'].split(),
+                      native: false, language: ['c', 'objc'])
+@@ -1984,8 +1984,8 @@
+ specific_ss.add_all(when: 'CONFIG_LINUX_USER', if_true: linux_user_ss)
+ 
+ # needed for fuzzing binaries
+-subdir('tests/qtest/libqos')
+-subdir('tests/qtest/fuzz')
++#subdir('tests/qtest/libqos')
++#subdir('tests/qtest/fuzz')
+ 
+ ########################
+ # Library dependencies #
+diff -uNr qemu-6.0.0/migration/postcopy-ram.c qemu-6.0.0-fix/migration/postcopy-ram.c
+--- qemu-6.0.0/migration/postcopy-ram.c	2021-04-29 17:18:58.000000000 +0000
++++ qemu-6.0.0-fix/migration/postcopy-ram.c	2021-06-29 17:15:56.122939931 +0000
+@@ -31,6 +31,8 @@
+ #include "trace.h"
+ #include "hw/boards.h"
+ 
++#include <linux/mman.h>
++
+ /* Arbitrary limit on size of each discard command,
+  * keeps them around ~200 bytes
+  */
+diff -uNr qemu-6.0.0/softmmu/physmem.c qemu-6.0.0-fix/softmmu/physmem.c
+--- qemu-6.0.0/softmmu/physmem.c	2021-04-29 17:18:58.000000000 +0000
++++ qemu-6.0.0-fix/softmmu/physmem.c	2021-06-29 17:15:56.126940005 +0000
+@@ -17,6 +17,8 @@
+  * License along with this library; if not, see <http://www.gnu.org/licenses/>.
+  */
+ 
++#include <linux/mman.h>
++
+ #include "qemu/osdep.h"
+ #include "qemu-common.h"
+ #include "qapi/error.h"
+diff -uNr qemu-6.0.0/tcg/i386/tcg-target.c.inc qemu-6.0.0-fix/tcg/i386/tcg-target.c.inc
+--- qemu-6.0.0/tcg/i386/tcg-target.c.inc	2021-04-29 17:18:58.000000000 +0000
++++ qemu-6.0.0-fix/tcg/i386/tcg-target.c.inc	2021-06-29 17:16:21.291408444 +0000
+@@ -1928,7 +1928,12 @@
+ # if defined(__x86_64__) && defined(__linux__)
+ #  include <asm/prctl.h>
+ #  include <sys/prctl.h>
+-int arch_prctl(int code, unsigned long addr);
++#  include <linux/unistd.h>
++static int arch_prctl(int code, unsigned long addr)
++{
++    return syscall(__NR_arch_prctl, code, addr);
++}
++
+ static inline int setup_guest_base_seg(void)
+ {
+     if (arch_prctl(ARCH_SET_GS, guest_base) == 0) {
+diff -uNr qemu-6.0.0/tests/meson.build qemu-6.0.0-fix/tests/meson.build
+--- qemu-6.0.0/tests/meson.build	2021-04-29 17:18:58.000000000 +0000
++++ qemu-6.0.0-fix/tests/meson.build	2021-06-29 17:16:08.151162480 +0000
+@@ -88,5 +88,4 @@
+ 
+ subdir('unit')
+ subdir('qapi-schema')
+-subdir('qtest')
+ subdir('migration')
+diff -uNr qemu-6.0.0/tests/vhost-user-bridge.c qemu-6.0.0-fix/tests/vhost-user-bridge.c
+--- qemu-6.0.0/tests/vhost-user-bridge.c	2021-04-29 17:18:58.000000000 +0000
++++ qemu-6.0.0-fix/tests/vhost-user-bridge.c	2021-06-29 17:15:56.126940005 +0000
+@@ -29,6 +29,8 @@
+ 
+ #define _FILE_OFFSET_BITS 64
+ 
++#include <linux/mman.h>
++
+ #include "qemu/osdep.h"
+ #include "qemu/atomic.h"
+ #include "qemu/ctype.h"
+diff -uNr qemu-6.0.0/ui/curses.c qemu-6.0.0-fix/ui/curses.c
+--- qemu-6.0.0/ui/curses.c	2021-04-29 17:18:59.000000000 +0000
++++ qemu-6.0.0-fix/ui/curses.c	2021-06-29 17:16:37.371709375 +0000
+@@ -566,14 +566,14 @@
+       0x25bc
+     };
+ 
+-    ucs2_to_nativecharset = iconv_open(local_codeset, "UCS-2");
++    ucs2_to_nativecharset = iconv_open(local_codeset, "UCS-2LE");
+     if (ucs2_to_nativecharset == (iconv_t) -1) {
+         fprintf(stderr, "Could not convert font glyphs from UCS-2: '%s'\n",
+                         strerror(errno));
+         exit(1);
+     }
+ 
+-    nativecharset_to_ucs2 = iconv_open("UCS-2", local_codeset);
++    nativecharset_to_ucs2 = iconv_open("UCS-2LE", local_codeset);
+     if (nativecharset_to_ucs2 == (iconv_t) -1) {
+         iconv_close(ucs2_to_nativecharset);
+         fprintf(stderr, "Could not convert font glyphs to UCS-2: '%s'\n",
+diff -uNr qemu-6.0.0/util/drm.c qemu-6.0.0-fix/util/drm.c
+--- qemu-6.0.0/util/drm.c	2021-04-29 17:18:59.000000000 +0000
++++ qemu-6.0.0-fix/util/drm.c	2021-06-29 17:16:02.471057210 +0000
+@@ -17,7 +17,6 @@
+ #include "qemu/osdep.h"
+ #include "qemu/drm.h"
+ 
+-#include <glob.h>
+ #include <dirent.h>
+ 
+ int qemu_drm_rendernode_open(const char *rendernode)
+diff -uNr qemu-6.0.0/util/memfd.c qemu-6.0.0-fix/util/memfd.c
+--- qemu-6.0.0/util/memfd.c	2021-04-29 17:18:59.000000000 +0000
++++ qemu-6.0.0-fix/util/memfd.c	2021-06-29 17:15:56.126940005 +0000
+@@ -32,6 +32,7 @@
+ #include "qemu/host-utils.h"
+ 
+ #if defined CONFIG_LINUX && !defined CONFIG_MEMFD
++#include <linux/mman.h>
+ #include <sys/syscall.h>
+ #include <asm/unistd.h>
+ 
+diff -uNr qemu-6.0.0/util/mmap-alloc.c qemu-6.0.0-fix/util/mmap-alloc.c
+--- qemu-6.0.0/util/mmap-alloc.c	2021-04-29 17:18:59.000000000 +0000
++++ qemu-6.0.0-fix/util/mmap-alloc.c	2021-06-29 17:15:56.126940005 +0000
+@@ -10,7 +10,7 @@
+  * later.  See the COPYING file in the top-level directory.
+  */
+ 
+-#ifdef CONFIG_LINUX
++#ifdef __linux__
+ #include <linux/mman.h>
+ #else  /* !CONFIG_LINUX */
+ #define MAP_SYNC              0x0
+diff -uNr qemu-6.0.0/util/oslib-posix.c qemu-6.0.0-fix/util/oslib-posix.c
+--- qemu-6.0.0/util/oslib-posix.c	2021-04-29 17:18:59.000000000 +0000
++++ qemu-6.0.0-fix/util/oslib-posix.c	2021-06-29 17:15:56.126940005 +0000
+@@ -42,6 +42,7 @@
+ #include "qemu/compiler.h"
+ 
+ #ifdef CONFIG_LINUX
++#include <linux/mman.h>
+ #include <sys/syscall.h>
+ #endif
+ 
+diff -uNr qemu-6.0.0/util/vfio-helpers.c qemu-6.0.0-fix/util/vfio-helpers.c
+--- qemu-6.0.0/util/vfio-helpers.c	2021-04-29 17:18:59.000000000 +0000
++++ qemu-6.0.0-fix/util/vfio-helpers.c	2021-06-29 17:15:56.126940005 +0000
+@@ -13,6 +13,7 @@
+ #include "qemu/osdep.h"
+ #include <sys/ioctl.h>
+ #include <linux/vfio.h>
++#include <linux/mman.h>
+ #include "qapi/error.h"
+ #include "exec/ramlist.h"
+ #include "exec/cpu-common.h"
